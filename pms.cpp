@@ -12,6 +12,16 @@
 
 const std::string FILENAME = "numbers";
 
+void print_queue(std::queue<int> q)
+{
+  while (!q.empty())
+  {
+    std::cout << q.front() << " ";
+    q.pop();
+  }
+  std::cout << std::endl;
+}
+
 
 void load_numbers(std::vector<int>& numbers) {
 
@@ -34,8 +44,10 @@ void load_numbers(std::vector<int>& numbers) {
 void print_numbers(const std::vector<int>& numbers) {
     for (int number : numbers) {
         std::cout << number << " ";
+                fflush(stdout);
     }
     std::cout << std::endl;
+                fflush(stdout);
 }
 
 void input_processor(std::vector<int>& numbers, int size) {
@@ -52,6 +64,7 @@ void output_processor(int size, int rank, int num_numbers) {
     bool working = false;
     int recieved = 0;
 
+
     while (!working || !q1.empty() || !q2.empty() || recieved < num_numbers)
     {
         //std::cout << "OUTPUT Working" << std::endl;
@@ -67,9 +80,13 @@ void output_processor(int size, int rank, int num_numbers) {
             int rank = status.MPI_TAG;
 
             if (rank == 0) {
+                //std::cout << "OUTPUT Recieved number: " << number << " Queue: " << rank << std::endl;
+                //fflush(stdout);
                 q1.push(number);
             }
             else {
+                //std::cout << "OUTPUT Recieved number: " << number << " Queue: " << rank << std::endl;
+                fflush(stdout);
                 q2.push(number);
             }
             recieved++;
@@ -77,7 +94,6 @@ void output_processor(int size, int rank, int num_numbers) {
 
         if (working || ((q1.size() >= pow(2, rank-1) && q2.size() >= 1) || (q2.size() >= pow(2, rank-1) && q1.size() >= 1))) {
             working = true;
-            //std::cout << "OUTPUT Working" << std::endl;
         }
 
         if (working) {
@@ -87,25 +103,36 @@ void output_processor(int size, int rank, int num_numbers) {
 
                 if (n1 < n2) {
                     q1.pop();
-                    printf("OUTPUT %d\n", n1);
+                    std::cout << n1 << std::endl;
+                fflush(stdout);
+
                 } else {
                     q2.pop();
-                    printf("OUTPUT %d\n", n2);
+                    std::cout << n2 << std::endl;
+                fflush(stdout);
                 }
             } else if (!q1.empty()) {
                 int n1 = q1.front();
                 q1.pop();
-                printf("OUTPUT %d\n", n1);
+                std::cout << n1 << std::endl;
             } else if (!q2.empty()) {
                 int n2 = q2.front();
                 q2.pop();
-                printf("OUTPUT %d\n", n2);
+                std::cout << n2 << std::endl;
+                fflush(stdout);
             }
         }
     }
 }
 
 
+void worker_send(int rank, std::queue<int>& queue, int& toIncrease, int& recieve_queue, int change_queue_freq) {
+    int num = queue.front();
+    queue.pop();
+    MPI_Send(&num, 1, MPI_INT, rank + 1, recieve_queue / change_queue_freq, MPI_COMM_WORLD);
+    recieve_queue = (recieve_queue + 1) % (2 * change_queue_freq);
+    toIncrease++;
+}
 
 
 void worker(int rank, int size, int num_numbers) {
@@ -116,6 +143,11 @@ void worker(int rank, int size, int num_numbers) {
     int change_queue_freq = (pow(2, rank));
     int recieve_queue = 0;
 
+    int numInFirst = 0;
+    int numInSecond = 0;
+    int cluster = pow(2, rank-1);
+
+
     while (!working || !q1.empty() || !q2.empty() || recieved < num_numbers){
         int number;
         MPI_Status status;
@@ -123,50 +155,72 @@ void worker(int rank, int size, int num_numbers) {
 
         if (recieved < num_numbers) {
 
-            //std::cout << "Waiting for number from rank: " << rank - 1 << std::endl;
             MPI_Recv(&number, 1, MPI_INT, rank - 1, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
-            //std::cout << "Received number: " << number << " from rank: " << rank - 1 << std::endl;
             recieved++;
 
             int queue = status.MPI_TAG;
 
             if (queue == 0) {
+                //std::cout << "Rank: " << rank << " Recieved number: " << number << " Queue: " << queue << std::endl;
+                //fflush(stdout);
                 q1.push(number);
             }
             else {
+                //std::cout << "Rank: " << rank << " Recieved number: " << number << " Queue: " << queue << std::endl;
+                //fflush(stdout);
                 q2.push(number);
             }
         } 
 
 
         if (working || ((q1.size() >= pow(2, rank-1) && q2.size() >= 1) || (q2.size() >= pow(2, rank-1) && q1.size() >= 1))) {
-            //std::cout << "Working" << std::endl;
+            //std::cout << "Rank: " << rank << " Working queue1: ";
+            //print_queue(q1);
+            //std::cout << " queue2: ";
+            //print_queue(q2);
+            //std::cout << std::endl;
             working = true;
         }
+
 
         if (working) {
             if (!q1.empty() && !q2.empty()) {
                 int n1 = q1.front();
                 int n2 = q2.front();
+                
+
+                //std::cout << "Rank: " << rank << " numInFirst: " << numInFirst << " numInSecond: " << numInSecond << std::endl;
+                //fflush(stdout);
+
+                if (numInFirst == cluster && numInSecond == cluster) {
+                    numInFirst = 0;
+                    numInSecond = 0;
+                }
+
+                if ((numInFirst == cluster && numInSecond < cluster) || (numInSecond == cluster && numInFirst < cluster)) {
+                    if (numInFirst > numInSecond) {
+                        worker_send(rank, q2, numInSecond, recieve_queue, change_queue_freq);
+                    } else {
+                        worker_send(rank, q1, numInFirst, recieve_queue, change_queue_freq);
+                    }
+                    continue;
+                }
 
                 if (n1 < n2) {
-                    q1.pop();
-                    MPI_Send(&n1, 1, MPI_INT, rank + 1, recieve_queue / change_queue_freq, MPI_COMM_WORLD);
+                    worker_send(rank, q1, numInFirst, recieve_queue, change_queue_freq);
                 } else {
-                    q2.pop();
-                    MPI_Send(&n2, 1, MPI_INT, rank + 1, recieve_queue / change_queue_freq, MPI_COMM_WORLD);
+                    worker_send(rank, q2, numInSecond, recieve_queue, change_queue_freq);
                 }
-                recieve_queue = (recieve_queue + 1) % (2 * change_queue_freq);
-            } else if (!q1.empty()) {
-                int n1 = q1.front();
-                q1.pop();
-                MPI_Send(&n1, 1, MPI_INT, rank + 1, recieve_queue / change_queue_freq, MPI_COMM_WORLD);
-                recieve_queue = (recieve_queue + 1) % (2 * change_queue_freq);
-            } else if (!q2.empty()) {
-                int n2 = q2.front();
-                q2.pop();
-                MPI_Send(&n2, 1, MPI_INT, rank + 1, recieve_queue / change_queue_freq, MPI_COMM_WORLD);
-                recieve_queue = (recieve_queue + 1) % (2 * change_queue_freq);
+            } 
+            else if (!q1.empty()) {
+                //std::cout<<"Rank: "<<rank<<" Sending from q1 for retard reason"<<std::endl;
+                //fflush(stdout);
+                worker_send(rank, q1, numInFirst, recieve_queue, change_queue_freq);
+            } 
+            else if (!q2.empty()) {
+                //std::cout<<"Rank: "<<rank<<" Sending from q2 for retard reason"<<std::endl;
+                //fflush(stdout);
+                worker_send(rank, q2, numInSecond, recieve_queue, change_queue_freq);
             }
         }
     }
@@ -201,7 +255,6 @@ int main(int argc, char* argv[]) {
     else {
         MPI_Bcast(&numbers_size, 1, MPI_INT, 0, MPI_COMM_WORLD);
     }
-
 
     work(numbers, rank, size, numbers_size);
 
